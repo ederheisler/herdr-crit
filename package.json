@@ -1,0 +1,9 @@
+{
+  "name": "herdr-crit",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

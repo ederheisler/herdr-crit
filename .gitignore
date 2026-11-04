@@ -1,0 +1,15 @@
+node_modules/
+.crit/
+/data/crit/
+/records/
+/pending/
+/locks/
+/work/
+/chrome-tabs/
+/external.json
+/browser-settings.json
+.env
+.env.*
+gpui-kit.d.ts
+jsconfig.json
+.DS_Store
