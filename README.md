@@ -208,8 +208,29 @@ Callback and ad hoc probes are not permanent suite coverage or native UI coverag
 It does not exercise Herdr's native keyboard handling or painting.
 Check those behaviors manually in Herdr after a user interface change.
 
+## Releases
+
+Release Please prepares a release pull request that updates the version and creates or updates `CHANGELOG.md`.
+The first release target is `0.1.0`. The package starts at `0.0.0` before that release.
+Use Conventional Commits, such as `feat: add a feature` and `fix: correct a bug`.
+The first release pull request requires a user-facing `feat` or `fix` commit because the initial commit does not use this convention.
+Mark breaking changes with `!` after the type or a `BREAKING CHANGE:` footer.
+Before `1.0.0`, breaking changes advance the minor version.
+
+The release workflow runs tests on `main` before it publishes a release.
+After a maintainer merges the release pull request, the workflow creates a `vX.Y.Z` tag and a GitHub release.
+It attaches a ZIP archive rooted at `crit/` from the released commit.
+The workflow does not publish a package to npm or merge pull requests automatically.
+
+The automation is not active until the workflow is committed and pushed.
+The repository owner must also enable **Allow GitHub Actions to create and approve pull requests** in Actions settings.
+The workflow uses the default `GITHUB_TOKEN` and does not approve pull requests.
+Events created by this token do not trigger downstream pull request or tag workflows.
+The bot's release pull request therefore does not automatically receive separate pull request CI.
+The release workflow itself tests `main` and uploads the ZIP.
+
 ## License and decisions
 
 This project is available under the [MIT license](LICENSE).
 See the [third-party notices](THIRD_PARTY_NOTICES) for Crit.
-The [project decisions](docs/decisions/README.md) record its public distribution and license choice.
+The [project decisions](docs/decisions/README.md) record its distribution, license, and release choices.
