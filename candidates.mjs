@@ -201,26 +201,7 @@ async function changes(mode, cwd) {
   return { options };
 }
 
-function live(context) {
-  const records = Array.isArray(context) ? context : Array.isArray(context?.records) ? context.records : [];
-  const recent = records.filter(record => record && record.mode === 'live' && record.source !== 'external' && !String(record.id || '').startsWith('external-'))
-    .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
-  const options = [], seen = new Set();
-  for (const record of recent) {
-    let url;
-    try { url = new URL(record.target); } catch { continue; }
-    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) continue;
-    url.search = ''; url.hash = '';
-    const value = url.toString();
-    if (secretValue.test(value) || seen.has(value)) continue;
-    seen.add(value);
-    options.push({ value, label: value, detail: 'Recently used' });
-    if (options.length === LIMIT) break;
-  }
-  return { options };
-}
-
-export async function candidates(request, context = {}) {
+export async function candidates(request) {
   if (!request || typeof request !== 'object' || !MODES.has(request.mode)) return { options: [], warning: 'Select a valid review mode.' };
   if (typeof request.cwd !== 'string' || !path.isAbsolute(request.cwd)) return { options: [], warning: 'Choose an absolute local working directory.' };
   let cwd;
@@ -228,7 +209,7 @@ export async function candidates(request, context = {}) {
     cwd = await fs.realpath(request.cwd);
     if (!(await fs.stat(cwd)).isDirectory()) throw new Error();
   } catch { return { options: [], warning: 'The local working directory does not exist or cannot be read.' }; }
-  if (request.mode === 'live') return live(context);
+  if (request.mode === 'live') return { options: [] };
   if (request.mode === 'git' || request.mode === 'range') return refs(request.mode, cwd);
   if (['files', 'plan', 'preview'].includes(request.mode)) return files(request.mode, cwd);
   return changes(request.mode, cwd);

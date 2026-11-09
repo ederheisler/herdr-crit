@@ -113,43 +113,12 @@ async function runScenario(name, candidates) {
     }
     const invalidCwd = { options: [], warning: 'Choose an absolute local working directory.' };
     for (const cwd of [undefined, null, '', '.', 'relative/path', 42]) {
-      assert.deepEqual(await candidates({ mode: 'live', cwd }), invalidCwd);
+      assert.deepEqual(await candidates({ mode: 'files', cwd }), invalidCwd);
     }
     await putFile(workspace, 'ordinary-file.txt');
     const inaccessible = { options: [], warning: 'The local working directory does not exist or cannot be read.' };
     assert.deepEqual(await candidates({ mode: 'files', cwd: path.join(workspace, 'missing') }), inaccessible);
-    assert.deepEqual(await candidates({ mode: 'live', cwd: path.join(workspace, 'ordinary-file.txt') }), inaccessible);
-    assert.deepEqual(await candidates(request('live')), { options: [] });
-    return;
-  }
-
-  if (name === 'live') {
-    const records = [
-      { mode: 'live', target: 'https://alpha.example.test/path?old=1#old', updatedAt: '2025-01-01T00:00:00Z' },
-      { mode: 'live', target: 'https://alpha.example.test/path?token=private#section', updatedAt: '2025-01-04T00:00:00Z' },
-      { mode: 'live', target: 'http://localhost:3210/preview?password=private', createdAt: '2025-01-03T00:00:00Z' },
-      { mode: 'live', target: 'https://beta.example.test', updatedAt: '2025-01-02T00:00:00Z' },
-      { mode: 'live', target: 'https://user:password@credentials.example/test', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', target: 'https://user@credentials.example/test', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', target: 'ftp://files.example/test', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', target: 'file:///tmp/example', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', target: 'javascript:alert(1)', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', target: 'not a URL', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', target: 'https://example.test/password=secret', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', source: 'external', target: 'https://external.example/', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'live', id: 'external-17', target: 'https://external-id.example/', updatedAt: '2025-03-01T00:00:00Z' },
-      { mode: 'pr', target: 'https://other-mode.example/', updatedAt: '2025-03-01T00:00:00Z' },
-      null,
-      {},
-    ];
-    const expected = { options: [
-      { value: 'https://alpha.example.test/path', label: 'https://alpha.example.test/path', detail: 'Recently used' },
-      { value: 'http://localhost:3210/preview', label: 'http://localhost:3210/preview', detail: 'Recently used' },
-      { value: 'https://beta.example.test/', label: 'https://beta.example.test/', detail: 'Recently used' },
-    ] };
-    assert.deepEqual(await candidates(request('live'), { records }), expected);
-    assert.deepEqual(await candidates(request('live'), records), expected);
-    assert.deepEqual(await candidates(request('live'), { records: 'invalid' }), { options: [] });
+    assert.deepEqual(await candidates({ mode: 'files', cwd: path.join(workspace, 'ordinary-file.txt') }), inaccessible);
     return;
   }
 
@@ -322,10 +291,6 @@ if (process.argv[2] === '--fixture') {
 } else {
   test('rejects invalid candidate requests and working directories', async () => {
     await withHelperFixture(fixture => fixture.run(import.meta.url, 'requests'));
-  });
-
-  test('returns safe recent live URLs in recency order without duplicates', async () => {
-    await withHelperFixture(fixture => fixture.run(import.meta.url, 'live'));
   });
 
   test('reports missing Git and forge commands without falling through', async () => {

@@ -6,7 +6,7 @@ const MODES = [
   { id: "git", label: "Repository", field: "Base branch (optional)", placeholder: "Default branch" },
   { id: "files", label: "Files", field: "Files to review", placeholder: "One path per line" },
   { id: "plan", label: "Plan", field: "Plan file", placeholder: "Path to plan" },
-  { id: "live", label: "Live app", field: "Live URL", placeholder: "http://localhost:3000" },
+  { id: "live", label: "Application" },
   { id: "preview", label: "HTML preview", field: "HTML file", placeholder: "Path to HTML file" },
   { id: "pr", label: "Pull request", field: "Pull request", placeholder: "Number or URL" },
   { id: "mr", label: "Merge request", field: "Merge request", placeholder: "Number or URL" },
@@ -18,6 +18,7 @@ const NON_GIT_MODES = MODES.filter((mode) => !GIT_MODES.includes(mode.id));
 const PHASES = {
   preparing_git: "Preparing files",
   preparing_story: "Preparing Story",
+  preparing_live: "Preparing application",
   starting: "Starting",
   reviewing: "In review",
   feedback_pending: "Handoff failed",
@@ -153,6 +154,7 @@ export default class Crit extends View {
     this.inputs = {};
     this.inputValues = {};
     for (const mode of MODES) {
+      if (mode.id === "live") continue;
       const input = mode.id === "files"
         ? TextareaState.new({ placeholder: mode.placeholder, rows: 3 })
         : InputState.new({ placeholder: mode.placeholder });
@@ -494,7 +496,7 @@ export default class Crit extends View {
   }
 
   start(space, agent, cwd, cx) {
-    const value = this.inputs[this.mode].value();
+    const value = this.mode === "live" ? "" : this.inputs[this.mode].value();
     if (!this.composing || !space || !agent || !cwd || this.busy) return;
     if (space.machine) {
       this.message = "Remote reviews are not supported yet. Choose an agent on this computer.";
@@ -511,7 +513,7 @@ export default class Crit extends View {
       cx.notify();
       return;
     }
-    if (this.mode !== "git" && !value.trim()) {
+    if (this.mode !== "git" && this.mode !== "live" && !value.trim()) {
       this.message = `Enter ${MODES.find((m) => m.id === this.mode).field.toLowerCase()}.`;
       cx.notify();
       return;
@@ -644,7 +646,7 @@ export default class Crit extends View {
 
   autocomplete(mode, previous, cx) {
     const selection = this.composerSelection;
-    if (!this.composing || this.busy === "start" || this.mode !== mode || this.targetFocus !== mode
+    if (!this.inputs[mode] || !this.composing || this.busy === "start" || this.mode !== mode || this.targetFocus !== mode
       || !selection || !this.selectionCurrent(selection.space, selection.agent, selection.cwd)
       || (GIT_MODES.includes(mode) && !this.contextReady(selection.space, selection.agent, selection.cwd))) {
       this.cancelCandidateTimer();
@@ -696,7 +698,7 @@ export default class Crit extends View {
   }
 
   pickerCurrent(picker) {
-    return Boolean(picker && this.composing && this.candidatePicker === picker && picker.mode === this.mode
+    return Boolean(picker && this.inputs[picker.mode] && this.composing && this.candidatePicker === picker && picker.mode === this.mode
       && this.selectionCurrent(picker.space, picker.agent, picker.cwd)
       && (!GIT_MODES.includes(picker.mode) || this.contextReady(picker.space, picker.agent, picker.cwd)));
   }
@@ -763,7 +765,7 @@ export default class Crit extends View {
   }
 
   browseCandidates(kind, space, agent, cwd, cx) {
-    if (!this.composing || !this.selectionCurrent(space, agent, cwd) || (GIT_MODES.includes(this.mode) && !this.contextReady(space, agent, cwd))) return;
+    if (!this.inputs[this.mode] || !this.composing || !this.selectionCurrent(space, agent, cwd) || (GIT_MODES.includes(this.mode) && !this.contextReady(space, agent, cwd))) return;
     if (this.candidatePicker?.manual && this.candidatePicker.kind === kind && this.candidatePicker.mode === this.mode && this.candidatePicker.cwd === cwd) {
       this.invalidateCandidates();
       cx.notify();
@@ -992,13 +994,13 @@ export default class Crit extends View {
     const canStart = Boolean(space && agent && cwd && !space.machine && !this.busy && gitReady);
     const startReason = !agent ? (this.agentAddress ? "Selected agent unavailable" : "Choose an agent") : !space ? "Agent space unavailable" : !cwd ? "Folder unavailable" : null;
     const showGitReason = Boolean(space && agent && cwd && !space.machine && gitRequired && !gitReady);
-    const field = this.mode === "files"
+    const field = this.mode === "live" ? null : this.mode === "files"
       ? Textarea.new(this.inputs.files).w_full().h(74).p(8).rounded(7).border_1().border_color(t.border).bg(t.background).text_color(t.foreground).text_size(12)
       : Input.new(this.inputs[this.mode]).w_full().h(32).px(9).rounded(7).border_1().border_color(t.border).bg(t.background).text_color(t.foreground).text_size(12);
     const name = agent ? agentLabel(agent) : this.agentAddress ? "Selected agent unavailable" : "Choose an agent";
     const pickerOpen = this.candidatePicker?.mode === this.mode && this.candidatePicker.cwd === cwd;
     const manualPickerOpen = pickerOpen && this.candidatePicker.manual;
-    const targetField = v_flex().gap(5)
+    const targetField = this.mode === "live" ? null : v_flex().gap(5)
       .child(div().text_size(11).text_color(t.muted).child(mode.field))
       .child(h_flex().gap(6).items_center()
         .child(div().flex_1().min_w(0)
@@ -1034,7 +1036,9 @@ export default class Crit extends View {
         .child(h_flex().child(this.button("crit-advanced", this.advanced ? "Hide advanced" : this.inputs.git.value() ? "Advanced · base set" : "Advanced", t,
           (cx) => { this.advanced = !this.advanced; this.invalidateCandidates(); cx.notify(); })))
         .when(this.advanced, (e) => e.child(targetField)))
-      .when(this.mode !== "git", (el) => el.child(targetField))
+      .when(this.mode === "live", (el) => el.child(div().text_size(11).text_color(t.muted)
+        .child("The assigned agent reuses the running application or starts it from this folder.")))
+      .when(this.mode !== "git" && this.mode !== "live", (el) => el.child(targetField))
       .child(h_flex().gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().tooltip(`Agent session: ${name}`)
           .text_color(agent ? t.foreground : t.muted).child(name))
@@ -1065,7 +1069,7 @@ export default class Crit extends View {
   reviewRow(review, t, liveAgents, allSpaces) {
     const mode = MODES.find((m) => m.id === review.mode)?.label || (review.mode === "review" ? "Review" : review.mode || "Review");
     const phase = PHASES[review.phase] || review.phase || "Unknown";
-    const working = ["preparing_git", "preparing_story", "starting", "agent_working"].includes(review.phase);
+    const working = ["preparing_git", "preparing_story", "preparing_live", "starting", "agent_working"].includes(review.phase);
     const attention = ["reviewing", "feedback_pending", "error"].includes(review.phase);
     const external = review.source === "external";
     const failed = ["feedback_pending", "error"].includes(review.phase);

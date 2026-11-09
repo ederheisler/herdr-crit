@@ -75,7 +75,7 @@ Updates to `main` do not transfer to the clone. Select `main` in Herdr to use th
 
 1. Select `main-crit` in Herdr and open **Crit** beside **Files** and **Changes**.
 2. Select **+** (tooltip: **New review**).
-3. Open **Type**, choose a review type, and enter or select its target.
+3. Open **Type**, choose a review type, and enter or select its target when needed.
 4. Use the agent chooser to select an agent from any space. Each entry shows the space and working folder for that agent. The selected folder remains visible outside the chooser.
 5. Select **Start review** and complete the review in the browser.
 
@@ -84,14 +84,14 @@ The review types are:
 - **Repository**: working changes, with an optional base branch under **Advanced**.
 - **Files**: one path per line. Suggestions exclude selected files. Delete a line to remove its file.
 - **Plan**: a plan file.
-- **Live app**: an HTTP or HTTPS URL.
+- **Application**: no target. Select an agent and a folder; the agent finds or starts the project app.
 - **HTML preview**: an HTML file.
 - **Pull request** and **Merge request**: a number or URL.
 - **Commit range**: a range such as `base..head`.
 
 This mod requires a Git working tree for **Repository**, **Commit range**, **Pull request**, and **Merge request**, including full request URLs and Story.
 Those types appear only after the selected folder passes its Git check. Otherwise, **Type** shows only the four non-Git types below.
-**Files**, **Plan**, **Live app**, and **HTML preview** do not require a Git working tree.
+**Files**, **Plan**, **Application**, and **HTML preview** do not require a Git working tree.
 
 **Story** is available for repository reviews, pull requests, merge requests, and commit ranges.
 The selected existing agent authors the Story. The mod does not launch another agent or use `agent_cmd`.
@@ -137,6 +137,19 @@ For Git reviews with untracked files, the mod asks that agent to prepare the int
 The agent uses `git add -N --` only on exact intended paths, not unrelated files or secrets.
 If the task scope is unclear, the agent must ask rather than guess.
 Git preparation can delay the browser until the agent completes its callback.
+
+**Application** reviews have no URL field and no URL suggestions. You do not paste an address.
+The review shows that it is preparing the application while the selected existing agent works.
+The agent reuses the app that already runs for the selected project. If none runs, it starts the app with the project commands.
+The agent then finds the actual app URL and reports it to the bridge, which starts Crit with that URL.
+The mod does not start another agent. It prevents duplicate Application reviews for the same app.
+
+The app keeps its real origin, for example `127.0.0.1:4322`. Crit opens its own page at `localhost:<Crit port>/live`, not at `127.0.0.1`.
+These are two different origins, and the mod does not change CSP, framing, or other browser security.
+A mismatch between `localhost` and `127.0.0.1` in Crit's injection origin can drop the `agent-ready` message, so Comment mode does not start.
+The agent handoff requires a check in the browser that Comment mode is ready.
+Browsing the app does not prove that Crit injection works.
+If Comment mode is not ready, see [Crit live mode](https://github.com/tomasz-tomczyk/crit/blob/main/docs/live-mode.md).
 
 After a review finishes, the bridge sends the actual Crit feedback to its assigned agent.
 For a live, idle agent, delivery uses `hc send --if idle`.

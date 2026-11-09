@@ -93,8 +93,8 @@ bridgeTest('start rejects invalid and unsupported requests before launching a re
     [{ agentAddress: 'agent/name' }, /local agent/i],
     [{ agentAddress: '-option' }, /local agent/i],
     [{ mode: 'git', target: 'main\nother' }, /single line/i],
-    [{ mode: 'live', target: 'file:///tmp/page' }, /HTTP or HTTPS/i],
-    [{ mode: 'live', target: 'https://user:password@example.com/' }, /without credentials/i],
+    [{ mode: 'live', target: 'https://example.com/' }, /do not supply a target/i],
+    [{ mode: 'live', story: true, target: '' }, /Story/i],
     [{ mode: 'pr', target: 'https://user:password@example.com/pull/1' }, /credentials/i],
   ]) {
     await startRejected(fixture, request(fixture, changes), reason);
@@ -139,14 +139,97 @@ bridgeTest('whitespace-only Files lines are omitted without trimming genuine nam
   assert.ok(reviews.some(review => review.id === different.id));
 });
 
-bridgeTest('live URL normalization is visible at start and equivalent URLs reserve one scope', async fixture => {
-  const first = await start(fixture, request(fixture, {
-    mode: 'live', target: 'https://example.com/page?token=private#section',
-  }));
-  assert.equal(first.review.target, 'https://example.com/page');
-  await fixture.waitEvent(event => event.tool === 'crit' && event.kind === 'start');
-  await startRejected(fixture, request(fixture, { mode: 'live', target: 'https://example.com/page?other=1' }), /scope is already active/i);
+bridgeTest('Application preparation is private, retryable, URL-free and exclusive until resolved', async fixture => {
+  await fixture.startForeground();
+  await fixture.configure({ status: 'working' });
+  const first = await start(fixture, request(fixture, { mode: 'live', target: undefined }));
+  assert.equal(first.review.target, '');
+  assert.equal(first.review.phase, 'preparing_live');
+  await fixture.review(first.id, review => review.phase === 'feedback_pending');
+  assert.equal((await fixture.events()).some(event => event.tool === 'crit'), false);
+  await startRejected(fixture, request(fixture, { mode: 'live', target: '' }), /scope is already active/i);
+  await rejected(fixture, ['live-ready', first.id, 'http://localhost:4322'], /not waiting for Application preparation/i);
+  await fixture.configure({ status: 'idle' });
+  await ok(fixture, 'deliver', first.id);
+  const sent = await finishSend(fixture, 'success');
+  await handoffFrom(sent);
+  await fixture.review(first.id, review => review.phase === 'preparing_live');
+  for (const url of ['file:///tmp/app', 'https://user:password@example.com/', 'http://localhost:4322/\n', 'not-a-url']) {
+    await rejected(fixture, ['live-ready', first.id, url], /HTTP or HTTPS/i);
+  }
+  assert.equal((await fixture.events()).some(event => event.tool === 'crit'), false);
+  assert.equal((await close(fixture, first.id)).closed, true);
+  await rejected(fixture, ['live-ready', first.id, 'http://localhost:4322'], /closed/i);
+  const second = await start(fixture, request(fixture, { mode: 'live', target: '' }));
+  assert.notEqual(second.id, first.id);
 });
+
+bridgeTest('Application callback preserves the actual target, transitions scopes and deduplicates the resolved scope', async fixture => {
+  await fixture.startForeground();
+  const first = await start(fixture, request(fixture, { mode: 'live', target: '' }));
+  await finishSend(fixture, 'success');
+  const target = 'http://127.0.0.1:4322/actual/app';
+  const launched = await ok(fixture, 'live-ready', first.id, `${target}?secret=private#section`);
+  assert.equal(launched.review.target, target);
+  assert.match(launched.notice, /unverified/i);
+  const launch = await fixture.waitEvent(event => event.tool === 'crit' && event.kind === 'start');
+  assert.deepEqual(launch.args, ['live', '--no-open', target]);
+  await ok(fixture, 'live-ready', first.id, target);
+  assert.equal((await fixture.events()).filter(event => event.tool === 'crit').length, 1);
+  await rejected(fixture, ['live-ready', first.id, 'http://localhost:4323/other'], /worker.*active|not waiting/i);
+  const second = await start(fixture, request(fixture, { mode: 'live', target: '' }));
+  await fixture.review(second.id, review => review.phase === 'preparing_live');
+  await eventually('second Application prep delivery to settle', async () => {
+    const record = JSON.parse(await fs.readFile(path.join(fixture.records, `${second.id}.json`), 'utf8'));
+    return !record._worker && !record._delivery && record._waitingFor === 'live_prep';
+  });
+  await rejected(fixture, ['live-ready', second.id, 'http://127.0.0.1:4322/actual/app/?other=private'], /scope is already active/i);
+  assert.equal((await fixture.events()).filter(event => event.tool === 'crit').length, 1);
+  assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === second.id).target, '');
+});
+
+for (const [host, publicURL, expected] of [
+  ['127.0.0.1', undefined, 'http://localhost:4321/live'],
+  ['::1', undefined, 'http://localhost:4321/live'],
+  ['127.0.0.1', 'https://crit.example.com/review', 'https://crit.example.com/review/live'],
+]) {
+  bridgeTest(`Application launch publishes a private continuation with Crit URL ${expected}`, async fixture => {
+    const daemon = await fixture.startForeground();
+    await fs.writeFile(path.join(fixture.root, 'crit-daemon-pid'), `${daemon.pid}\n`);
+    // Model the daemon's parent relation to the fixture Crit launcher.
+    const ps = path.join(fixture.bin, 'ps');
+    const original = await fs.readFile(ps, 'utf8');
+    await fs.writeFile(ps, original.replace('#!/bin/sh\n', `#!/bin/sh\nif [ "$1" = "-p" ] && [ "$4" = "ppid=" ]; then /bin/cat "$FIXTURE_ROOT/launch-parent"; exit; fi\n`));
+    const started = await start(fixture, request(fixture, { mode: 'live', target: '' }));
+    await finishSend(fixture, 'success');
+    const target = 'http://127.0.0.1:4322/app';
+    const callback = ok(fixture, 'live-ready', started.id, target);
+    const launch = await fixture.waitEvent(event => event.tool === 'crit' && event.kind === 'start');
+    await fs.writeFile(path.join(fixture.root, 'launch-parent'), String(launch.pid));
+    const sessionId = createHash('sha256').update(`${fixture.workspace}\0live\0${target}`).digest('hex').slice(0, 12);
+    await fs.writeFile(path.join(fixture.home, '.crit', 'sessions', `${sessionId}.json`), JSON.stringify({
+      pid: daemon.pid, port: 4321, host, public_url: publicURL, cwd: fixture.workspace, branch: 'main',
+      review_path: path.join(fixture.home, '.crit', 'reviews', sessionId),
+      started_at: '2024-01-02T12:00:01.000Z', args: ['live', target],
+    }));
+    const result = await callback;
+    assert.equal(result.review.url, expected);
+    assert.equal(result.review.target, target);
+    assert.equal(result.review.phase, 'reviewing');
+    assert.ok(result.handoff);
+    const file = /^Read the private Crit handoff at '([^']+)' in full/.exec(result.handoff)?.[1];
+    assert.ok(file);
+    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+    const again = await ok(fixture, 'live-ready', started.id, target);
+    assert.equal(again.handoff, result.handoff);
+    assert.equal((await fixture.events()).filter(event => event.tool === 'crit').length, 1);
+    const record = JSON.parse(await fs.readFile(path.join(fixture.records, `${started.id}.json`), 'utf8'));
+    assert.ok(record._worker);
+    assert.ok(record._waiter);
+    assert.equal(record._delivery, undefined);
+    assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === started.id)._liveVerificationFile, undefined);
+  });
+}
 
 bridgeTest('list hides private fields and closed or malformed records, newest first', async fixture => {
   const older = await fixture.seedRecord({
