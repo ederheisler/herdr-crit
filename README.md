@@ -120,7 +120,7 @@ Use the circular-arrow control (tooltip: **Refresh sessions**) to discover sessi
 The inbox also refreshes its stored review list.
 Each review shows its project or document title and status, then its assigned space, agent name, and terminal address, with direct action buttons below.
 Indicators spin while preparing, starting, or applying feedback and use the Herdr working token.
-Waiting and review-ready use theme ANSI yellow. Failures use blocked, approved uses done, and external or idle uses idle.
+Review-ready uses theme ANSI yellow. Failures use blocked, approved uses done, and external or idle uses idle.
 Hover for the exact phase.
 Use **Open** to open its browser URL and **Agent** to show its assigned agent.
 By default, **Open** uses the system browser. Optional Chrome integration can reuse a review tab.
@@ -152,11 +152,12 @@ Browsing the app does not prove that Crit injection works.
 If Comment mode is not ready, see [Crit live mode](https://github.com/tomasz-tomczyk/crit/blob/main/docs/live-mode.md).
 
 After a review finishes, the bridge sends the actual Crit feedback to its assigned agent.
-For a live, idle agent, delivery uses `hc send --if idle`.
-For a live agent in the Done state, the bridge checks its state again and sends without force.
-The Done-state check and send are not atomic because `hc` 0.1.17 cannot guard on Done.
-If the agent is working, blocked, unknown, or exited, delivery waits for **Retry** (tooltip: **Retry feedback handoff**).
-If delivery fails, make the agent available and select **Retry**.
+For a validated live agent in the idle, working, or Done state, preparation and feedback handoffs use regular `hc send`.
+The bridge sends directly to the selected agent, without an idle guard or a wait in the mod.
+The selected agent handles input scheduling. The mod does not guarantee that the input enters a queue.
+The mod never invokes interrupt or force, and it does not require a new agent.
+Blocked, error, unknown, or exited agents require **Retry** (tooltip: **Retry handoff**).
+If delivery fails, make the agent available and select **Retry**. An uncertain send is never resent automatically.
 The stored handoff supports retry without rerunning the completed review.
 If a handoff is interrupted with an unknown outcome, Close stays blocked until a successful Retry.
 If the original agent terminal is gone, automatic recovery is unavailable. Check whether feedback was delivered before any manual record cleanup.

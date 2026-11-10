@@ -45,16 +45,16 @@ if (tool === 'foreground') {
     event('get');
     const s = state();
     if (s.lookupFailure) { process.stderr.write('fixture terminal unavailable\\n'); process.exitCode = 1; }
-    else process.stdout.write(JSON.stringify({ address: s.address || args[2], state: 'live', foreground: { pid: s.foregroundPid }, status: { state: s.status } }));
-  } else if (args[0] === 'send' && (args.length === 3 || (args.length === 5 && args[1] === '--if' && args[2] === 'idle'))) {
+    else process.stdout.write(JSON.stringify({ address: s.address || args[2], state: s.terminalState || 'live', foreground: { pid: s.foregroundPid }, status: { state: s.status } }));
+  } else if (args[0] === 'send' && args.length === 3) {
     const s = state();
     const mode = s.send;
     event('send-start', { mode });
-    // Model hc's atomic idle condition at send time, independently of the earlier lookup.
-    if (args.length === 5 && (s.statusAtSend ?? s.status) !== 'idle') {
+    // Default hc send refuses blocked input, including a lookup-to-send race.
+    if ((s.statusAtSend ?? s.status) === 'blocked') {
       event('send-rejected', { mode });
-      process.stderr.write('fixture terminal is no longer idle\\n');
-      process.exitCode = 1;
+      process.stderr.write('fixture terminal is blocked\\n');
+      process.exitCode = 10;
     } else if (mode === 'hold') waitForStop('stop-hold');
     else {
       event('send-finish', { mode });
