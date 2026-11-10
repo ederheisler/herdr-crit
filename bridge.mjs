@@ -749,12 +749,11 @@ async function sendToReadyAgent(record, pointer, deliveryId) {
   try { process.kill(terminal.foreground.pid, 0); }
   catch { return { code: 1, stderr: 'The assigned agent program is no longer running.' }; }
   const state = terminal.status?.state;
-  if (state !== 'idle' && state !== 'done') {
+  if (state !== 'idle' && state !== 'working' && state !== 'done') {
     return { code: 1, stderr: `The assigned agent is not ready (${typeof state === 'string' ? state : 'unknown'}).` };
   }
-  // hc has no --if done: this is a fresh readiness check followed by an
-  // ordinary send, not an atomic status condition. Never force or interrupt.
-  const condition = state === 'idle' ? ['--if', 'idle'] : [];
+  // The recipient handles input scheduling. Let hc refuse blocked input;
+  // never force, interrupt, or impose an idle-only condition.
   const allowed = withRecord(record.id, r => {
     if (r.phase === 'closed' || r._delivery?.id !== deliveryId) return false;
     r._delivery.sending = true;
@@ -765,7 +764,7 @@ async function sendToReadyAgent(record, pointer, deliveryId) {
     if (r.phase === 'closed' || r._delivery?.id !== deliveryId) {
       return { code: 1, stderr: 'The review handoff was canceled.' };
     }
-    return runProcess('hc', ['send', ...condition, record.agentAddress, pointer], { cwd: record.cwd });
+    return runProcess('hc', ['send', record.agentAddress, pointer], { cwd: record.cwd });
   });
 }
 async function sendPending(id, token) {

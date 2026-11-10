@@ -1111,7 +1111,7 @@ export default class Crit extends View {
         .when(!external && review.reconnectable === true, (el) => el.child(this.button(`crit-reconnect-${review.id}`, "Reconnect", t,
           (cx) => this.action("reconnect", [review.id], cx), { enabled: !this.busy })))
         .when(!external && review.phase === "feedback_pending", (el) => el.child(this.button(`crit-deliver-${review.id}`, "Retry", t,
-          (cx) => this.action("deliver", [review.id], cx), { enabled: !this.busy }).tooltip("Retry feedback handoff")))
+          (cx) => this.action("deliver", [review.id], cx), { enabled: !this.busy }).tooltip("Retry handoff")))
         .when(!external, (el) => el.child(this.button(`crit-jump-${review.id}`, "Agent", t,
           () => run("agent.focus", { terminal: review.agentAddress }), { enabled: canJump }).tooltip("Go to agent").accessibility_label("Go to agent")))
         .child(this.button(`crit-open-${review.id}`, "Open", t,

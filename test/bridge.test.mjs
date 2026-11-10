@@ -139,21 +139,23 @@ bridgeTest('whitespace-only Files lines are omitted without trimming genuine nam
   assert.ok(reviews.some(review => review.id === different.id));
 });
 
-bridgeTest('Application preparation is private, retryable, URL-free and exclusive until resolved', async fixture => {
+bridgeTest('busy Application preparation delivers privately to the selected agent before Crit starts', async fixture => {
   await fixture.startForeground();
   await fixture.configure({ status: 'working' });
   const first = await start(fixture, request(fixture, { mode: 'live', target: undefined }));
   assert.equal(first.review.target, '');
   assert.equal(first.review.phase, 'preparing_live');
-  await fixture.review(first.id, review => review.phase === 'feedback_pending');
-  assert.equal((await fixture.events()).some(event => event.tool === 'crit'), false);
-  await startRejected(fixture, request(fixture, { mode: 'live', target: '' }), /scope is already active/i);
-  await rejected(fixture, ['live-ready', first.id, 'http://localhost:4322'], /not waiting for Application preparation/i);
-  await fixture.configure({ status: 'idle' });
-  await ok(fixture, 'deliver', first.id);
   const sent = await finishSend(fixture, 'success');
+  assert.deepEqual(sent.args.slice(0, -1), ['send', 'terminal-1']);
   await handoffFrom(sent);
-  await fixture.review(first.id, review => review.phase === 'preparing_live');
+  const preparing = await fixture.review(first.id, review => review.phase === 'preparing_live');
+  assert.equal(preparing.agentAddress, 'terminal-1');
+  assert.equal(preparing.url, undefined);
+  assert.equal(preparing.error, undefined);
+  assert.equal(Object.keys(preparing).some(key => key.startsWith('_')), false);
+  assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 1);
+  assert.equal((await fixture.events()).some(event => event.args[0] === 'wait' || event.tool === 'crit'), false);
+  await startRejected(fixture, request(fixture, { mode: 'live', target: '' }), /scope is already active/i);
   for (const url of ['file:///tmp/app', 'https://user:password@example.com/', 'http://localhost:4322/\n', 'not-a-url']) {
     await rejected(fixture, ['live-ready', first.id, url], /HTTP or HTTPS/i);
   }
@@ -162,6 +164,42 @@ bridgeTest('Application preparation is private, retryable, URL-free and exclusiv
   await rejected(fixture, ['live-ready', first.id, 'http://localhost:4322'], /closed/i);
   const second = await start(fixture, request(fixture, { mode: 'live', target: '' }));
   assert.notEqual(second.id, first.id);
+});
+
+bridgeTest('busy Git preparation delivers once to the same agent before Crit starts', async fixture => {
+  await fixture.startForeground();
+  await fixture.configure({ status: 'working', untracked: true });
+  const started = await start(fixture, request(fixture, { mode: 'git', target: '' }));
+  const sent = await finishSend(fixture, 'success');
+  assert.deepEqual(sent.args.slice(0, -1), ['send', 'terminal-1']);
+  const preparing = await fixture.review(started.id, review => review.phase === 'preparing_git');
+  assert.equal(preparing.agentAddress, 'terminal-1');
+  assert.equal(preparing.round, 1);
+  assert.equal((await fixture.events()).some(event => event.args[0] === 'wait' || event.tool === 'crit'), false);
+  assert.equal(sent.args.at(-2), 'terminal-1');
+  const handoff = await handoffFrom(sent);
+  assert.match(handoff.message, /git add -N --/);
+  assert.ok(handoff.message.includes(started.id));
+  assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === started.id).phase, 'preparing_git');
+  assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 1);
+  await ok(fixture, 'git-ready', started.id);
+  await fixture.waitEvent(event => event.tool === 'crit' && event.kind === 'start');
+});
+
+bridgeTest('busy Story preparation delivers once to the same agent before Crit starts', async fixture => {
+  await fixture.startForeground();
+  await fixture.configure({ status: 'working' });
+  const started = await start(fixture, request(fixture, { mode: 'git', target: '', story: true }));
+  const sent = await finishSend(fixture, 'success');
+  assert.deepEqual(sent.args.slice(0, -1), ['send', 'terminal-1']);
+  const story = path.join(fixture.work, started.id, 'story.json');
+  await fs.writeFile(story, JSON.stringify({ prologue: {}, chapters: [], support: [] }));
+  assert.equal((await fixture.events()).some(event => event.args[0] === 'wait' || event.tool === 'crit'), false);
+  assert.match((await handoffFrom(sent)).message, /assigned author; do not start another agent/);
+  assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === started.id).phase, 'preparing_story');
+  assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 1);
+  await ok(fixture, 'story-ready', started.id, story);
+  await fixture.waitEvent(event => event.tool === 'crit' && event.kind === 'start');
 });
 
 bridgeTest('Application callback preserves the actual target, transitions scopes and deduplicates the resolved scope', async fixture => {
@@ -364,7 +402,7 @@ bridgeTest('close and reconnect reject unidentified generations and lost waiters
 
 bridgeTest('interrupted send blocks close through a failed retry and a confirmed retry clears it', async fixture => {
   const foreground = await fixture.startForeground();
-  await fixture.configure({ status: 'working' });
+  await fixture.configure({ status: 'blocked' });
   const id = randomUUID();
   const sessionId = 'abcdef123456';
   const waiter = await fixture.seedWaiter(id, {
@@ -379,7 +417,7 @@ bridgeTest('interrupted send blocks close through a failed retry and a confirmed
   assert.equal(recovered.reconnectable, true);
   assert.match(recovered.error, /reconnect/i);
   assert.equal((await ok(fixture, 'reconnect', id)).review.phase, 'starting');
-  const busy = await fixture.review(id, review => review.phase === 'feedback_pending' && /not ready/i.test(review.error || ''));
+  const busy = await fixture.review(id, review => review.phase === 'feedback_pending' && /not ready \(blocked\)/i.test(review.error || ''));
   assert.equal(busy.round, 1);
   assert.equal((await fixture.events()).some(event => event.tool === 'crit'), false);
 
@@ -397,6 +435,8 @@ bridgeTest('interrupted send blocks close through a failed retry and a confirmed
   await ok(fixture, 'deliver', id);
   const failed = await fixture.review(id, review => review.phase === 'feedback_pending' && /transport failed/i.test(review.error || ''));
   assert.equal(failed.round, 1);
+  await finishSend(fixture, 'fail');
+  assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 2);
   await closeRejected(fixture, id, /handoff.*in progress|outcome is unknown/i);
 
   await fixture.configure({ send: 'success' });
@@ -415,33 +455,95 @@ bridgeTest('interrupted send blocks close through a failed retry and a confirmed
   assert.equal(fixture.isOwnedProcess(foreground.pid), true);
 });
 
-bridgeTest('a terminal becoming busy after lookup keeps the handoff pending until it is idle', async fixture => {
+bridgeTest('a terminal becoming busy after lookup receives its handoff once without an idle-only condition', async fixture => {
   await fixture.startForeground();
-  // The lookup sees idle, but hc's atomic send-time check sees working.
+  // The lookup sees idle, but the selected agent starts working before send.
   await fixture.configure({ status: 'idle', statusAtSend: 'working', send: 'success' });
   const id = await fixture.seedRecord({ phase: 'feedback_pending' });
   await fixture.seedPending(id, { kind: 'finish', approved: false, message: 'Private review feedback.' });
   await ok(fixture, 'deliver', id);
-  const pending = await fixture.review(id, review =>
-    review.phase === 'feedback_pending' && /no longer idle/i.test(review.error || ''));
-  assert.equal(pending.round, 1);
-
-  await fixture.configure({ statusAtSend: 'idle' });
-  await ok(fixture, 'deliver', id);
-  await finishSend(fixture, 'success');
-  assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === id).phase, 'agent_working');
+  const sent = await finishSend(fixture, 'success');
+  assert.deepEqual(sent.args.slice(0, -1), ['send', 'terminal-1']);
+  assert.equal((await handoffFrom(sent)).message, 'Private review feedback.');
+  const delivered = (await ok(fixture, 'list')).reviews.find(review => review.id === id);
+  assert.equal(delivered.phase, 'agent_working');
+  assert.equal(delivered.round, 1);
+  assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 1);
+  assert.equal((await fixture.events()).some(event => event.args[0] === 'wait'), false);
   assert.equal((await close(fixture, id)).closed, true);
 });
 
-bridgeTest('a done terminal receives an approved handoff without an idle-only condition', async fixture => {
+for (const [status, approved] of [['working', false], ['working', true], ['done', true]]) {
+  bridgeTest(`${status} terminal receives ${approved ? 'approved' : 'unresolved'} feedback once without waiting`, async fixture => {
+    await fixture.startForeground();
+    await fixture.configure({ status, send: 'success' });
+    const id = await fixture.seedRecord({ phase: 'feedback_pending' });
+    await fixture.seedPending(id, { kind: 'finish', approved, message: 'Private finish details.' });
+    await ok(fixture, 'deliver', id);
+    const sent = await finishSend(fixture, 'success');
+    assert.deepEqual(sent.args.slice(0, -1), ['send', 'terminal-1']);
+    assert.equal((await handoffFrom(sent)).message, 'Private finish details.');
+    const delivered = (await ok(fixture, 'list')).reviews.find(review => review.id === id);
+    assert.equal(delivered.phase, approved ? 'approved' : 'agent_working');
+    assert.equal(delivered.round, 1);
+    assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 1);
+    assert.equal((await fixture.events()).some(event => event.args[0] === 'wait' || event.tool === 'crit'), false);
+    assert.equal((await close(fixture, id)).closed, true);
+  });
+}
+
+for (const [name, changes, reason] of [
+  ['blocked', { status: 'blocked' }, /not ready \(blocked\)/i],
+  ['error', { status: 'error' }, /not ready \(error\)/i],
+  ['unknown status', { status: 'unrecognized' }, /not ready \(unrecognized\)/i],
+  ['exited', { terminalState: 'finished' }, /program is not available/i],
+]) {
+  bridgeTest(`a ${name} agent requires manual Retry without sending or forcing input`, async fixture => {
+    await fixture.startForeground();
+    await fixture.configure(changes);
+    const id = await fixture.seedRecord({ phase: 'feedback_pending' });
+    await fixture.seedPending(id, { kind: 'finish', approved: false, message: 'Private feedback.' });
+    await ok(fixture, 'deliver', id);
+    const pending = await fixture.review(id, review => review.phase === 'feedback_pending' && reason.test(review.error || ''));
+    assert.match(pending.error, reason);
+    await fixture.configure({ status: 'idle', terminalState: 'live' });
+    assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === id).phase, 'feedback_pending');
+    assert.equal((await fixture.events()).some(event => event.kind === 'send-start'), false);
+    await ok(fixture, 'deliver', id);
+    const sent = await finishSend(fixture, 'success');
+    assert.deepEqual(sent.args.slice(0, -1), ['send', 'terminal-1']);
+    assert.equal((await handoffFrom(sent)).message, 'Private feedback.');
+    assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 1);
+    assert.equal((await fixture.events()).some(event => event.args[0] === 'wait'), false);
+    assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === id).phase, 'agent_working');
+    assert.equal((await close(fixture, id)).closed, true);
+  });
+}
+
+bridgeTest('an agent blocked at send keeps its handoff for manual Retry without force or automatic resend', async fixture => {
   await fixture.startForeground();
-  await fixture.configure({ status: 'done', send: 'success' });
+  await fixture.configure({ status: 'idle', statusAtSend: 'blocked' });
   const id = await fixture.seedRecord({ phase: 'feedback_pending' });
-  await fixture.seedPending(id, { kind: 'finish', approved: true, message: 'Private approval details.' });
+  await fixture.seedPending(id, { kind: 'finish', approved: false, message: 'Private blocked feedback.' });
+  await ok(fixture, 'deliver', id);
+  const attempt = await fixture.waitEvent(event => event.kind === 'send-rejected');
+  await eventually('blocked delivery worker to exit', () => !fixture.isOwnedProcess(attempt.ppid));
+  const pending = await fixture.review(id, review => review.phase === 'feedback_pending');
+  assert.match(pending.error, /blocked/i);
+  assert.equal(pending.agentAddress, 'terminal-1');
+  assert.deepEqual(attempt.args.slice(0, -1), ['send', 'terminal-1']);
+  await fixture.configure({ statusAtSend: 'working' });
+  assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === id).phase, 'feedback_pending');
+  assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 1);
+  assert.equal((await fixture.events()).some(event => event.kind === 'send-finish'), false);
   await ok(fixture, 'deliver', id);
   const sent = await finishSend(fixture, 'success');
-  assert.equal((await handoffFrom(sent)).message, 'Private approval details.');
-  assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === id).phase, 'approved');
+  assert.equal(sent.args.at(-1), attempt.args.at(-1));
+  assert.deepEqual(sent.args.slice(0, -1), ['send', 'terminal-1']);
+  assert.equal((await handoffFrom(sent)).message, 'Private blocked feedback.');
+  assert.equal((await fixture.events()).filter(event => event.kind === 'send-start').length, 2);
+  assert.equal((await fixture.events()).some(event => event.args[0] === 'wait'), false);
+  assert.equal((await ok(fixture, 'list')).reviews.find(review => review.id === id).phase, 'agent_working');
   assert.equal((await close(fixture, id)).closed, true);
 });
 
